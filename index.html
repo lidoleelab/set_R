@@ -1,0 +1,496 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Complete Set R</title>
+
+<style>
+body {
+  margin: 0;
+  background: #000;
+  overflow: hidden;
+  user-select: none;
+  font-family: Helvetica, Arial, sans-serif;
+  cursor: pointer;
+}
+
+#game {
+  position: absolute;
+  background: #000;
+  color: #fff;
+  overflow: hidden;
+}
+
+#uiCanvas {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+
+#boardWrap {
+  position: absolute;
+  left: 50%;
+  top: 54%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  z-index: 3;
+}
+
+#board {
+  display: grid;
+  grid-template-columns: repeat(5, 54px);
+  grid-template-rows: repeat(5, 54px);
+  gap: 6px;
+}
+
+.cell {
+  width: 54px;
+  height: 54px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 25px;
+  box-sizing: border-box;
+  cursor: pointer;
+}
+
+.cell.dragging {
+  opacity: 0.25;
+}
+
+#set {
+  margin-top: 26px;
+  font-size: 19.25px;
+  white-space: nowrap;
+  min-height: 34px;
+}
+
+#start {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  background: #000;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  line-height: 1.8;
+  font-size: 20px;
+  cursor: pointer;
+}
+
+.green {
+  color: #00ff00;
+}
+</style>
+</head>
+
+<body>
+<div id="game">
+  <canvas id="uiCanvas"></canvas>
+
+  <div id="boardWrap">
+    <div id="board"></div>
+    <div id="set">Collected = { Ø }</div>
+  </div>
+
+  <div id="start">
+    <div>
+      { Ø } traces R<br>
+      Complete Set R.<br><br>
+      <span class="green">Click to Start</span>
+    </div>
+  </div>
+</div>
+
+<script>
+const gameEl = document.getElementById("game");
+const uiCanvas = document.getElementById("uiCanvas");
+const ctx = uiCanvas.getContext("2d");
+
+const boardEl = document.getElementById("board");
+const setEl = document.getElementById("set");
+const startEl = document.getElementById("start");
+
+let W, H;
+
+const UI_SIZE = 18;
+const STATUS_SIZE = 20;
+const GREEN = "#00ff00";
+
+function resizeGame() {
+  const s = Math.min(window.innerWidth, window.innerHeight);
+
+  W = s;
+  H = s;
+
+  gameEl.style.width = s + "px";
+  gameEl.style.height = s + "px";
+  gameEl.style.left = (window.innerWidth - s) / 2 + "px";
+  gameEl.style.top = (window.innerHeight - s) / 2 + "px";
+
+  uiCanvas.width = s;
+  uiCanvas.height = s;
+
+  drawUI();
+}
+
+window.addEventListener("resize", resizeGame);
+
+const emojis = [
+  "😎", "😮", "😐", "🙂", "😶",
+  "🙁", "😕", "😑", "😬", "😴"
+];
+
+const size = 5;
+const maxLevel = 5;
+
+let level = 1;
+let mission = [];
+let board = [];
+let collected = [];
+let dragging = null;
+let running = false;
+let movesLeft = 0;
+let gameState = "start";
+let message = "Swap only adjacent emojis.";
+let messageColor = GREEN;
+
+function gameFont(size) {
+  return `${size}px Helvetica, Arial, sans-serif`;
+}
+
+function makeMission() {
+  return emojis.slice(0, level + 2);
+}
+
+function getMoveLimit() {
+  return 10 + level * 4;
+}
+
+function randomEmoji() {
+  return emojis[Math.floor(Math.random() * emojis.length)];
+}
+
+function makeBoard() {
+  return Array.from({ length: size }, () =>
+    Array.from({ length: size }, () => randomEmoji())
+  );
+}
+
+function ensureMissionEmojisExist() {
+  mission.forEach((emoji, i) => {
+    const x = i % size;
+    const y = Math.floor(i / size);
+    board[y][x] = emoji;
+  });
+
+  shuffleBoard();
+}
+
+function shuffleBoard() {
+  const flat = board.flat();
+
+  for (let i = flat.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [flat[i], flat[j]] = [flat[j], flat[i]];
+  }
+
+  board = [];
+
+  for (let y = 0; y < size; y++) {
+    board.push(flat.slice(y * size, y * size + size));
+  }
+}
+
+function setupLevel() {
+  mission = makeMission();
+  board = makeBoard();
+  movesLeft = getMoveLimit();
+  dragging = null;
+  running = true;
+  gameState = "running";
+  collected = [];
+
+  ensureMissionEmojisExist();
+
+  message = "Swap only adjacent emojis.";
+  messageColor = GREEN;
+
+  updateCollectedProgress();
+  render();
+}
+
+function resetGame() {
+  level = 1;
+  collected = [];
+  setupLevel();
+}
+
+function nextLevel() {
+  running = false;
+  gameState = "complete";
+
+  message = "Completed";
+  messageColor = GREEN;
+
+  boardEl.innerHTML = "";
+  setEl.textContent = "";
+
+  drawUI();
+
+  setTimeout(() => {
+    level++;
+
+    if (level > maxLevel) {
+      finishGame();
+    } else {
+      setupLevel();
+    }
+  }, 1000);
+}
+
+function finishGame() {
+  running = false;
+  gameState = "finished";
+
+  startEl.innerHTML =
+    "<div>" +
+    "Set R Completed<br><br>" +
+    "<span class='green'>Click to Restart</span>" +
+    "</div>";
+
+  startEl.style.display = "flex";
+}
+
+function gameOver(reason) {
+  running = false;
+  gameState = "gameover";
+
+  startEl.innerHTML =
+    "<div>" +
+    "Level " + level + "<br>" +
+    reason +
+    "<br><br>" +
+    "<span class='green'>Click to Retry</span>" +
+    "</div>";
+
+  startEl.style.display = "flex";
+}
+
+function isAdjacent(a, b) {
+  return Math.abs(a.x - b.x) + Math.abs(a.y - b.y) === 1;
+}
+
+function swapCells(a, b) {
+  const temp = board[a.y][a.x];
+  board[a.y][a.x] = board[b.y][b.x];
+  board[b.y][b.x] = temp;
+}
+
+function findPathForLength(targetLength) {
+  const dirs = [
+    { dx: 1, dy: 0 },
+    { dx: -1, dy: 0 },
+    { dx: 0, dy: 1 },
+    { dx: 0, dy: -1 }
+  ];
+
+  function search(x, y, index, visited, path) {
+    if (board[y][x] !== mission[index]) return null;
+
+    const key = x + "," + y;
+
+    visited.add(key);
+    path.push({ x, y });
+
+    if (index === targetLength - 1) {
+      return path;
+    }
+
+    for (const d of dirs) {
+      const nx = x + d.dx;
+      const ny = y + d.dy;
+      const nextKey = nx + "," + ny;
+
+      if (
+        nx >= 0 &&
+        nx < size &&
+        ny >= 0 &&
+        ny < size &&
+        !visited.has(nextKey)
+      ) {
+        const result = search(
+          nx,
+          ny,
+          index + 1,
+          new Set(visited),
+          [...path]
+        );
+
+        if (result) return result;
+      }
+    }
+
+    return null;
+  }
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      if (board[y][x] === mission[0]) {
+        const path = search(x, y, 0, new Set(), []);
+        if (path) return path;
+      }
+    }
+  }
+
+  return null;
+}
+
+function updateCollectedProgress() {
+  let longest = 0;
+
+  for (let len = 1; len <= mission.length; len++) {
+    if (findPathForLength(len)) {
+      longest = len;
+    }
+  }
+
+  collected = mission.slice(0, longest);
+}
+
+function replaceCompletedPath(path) {
+  path.forEach(p => {
+    board[p.y][p.x] = randomEmoji();
+  });
+}
+
+function checkComplete() {
+  const path = findPathForLength(mission.length);
+
+  if (!path) return;
+
+  collected = [...mission];
+  replaceCompletedPath(path);
+  render();
+
+  setTimeout(() => {
+    nextLevel();
+  }, 500);
+}
+
+function drawUI() {
+  if (!ctx || !W || !H) return;
+
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.fillStyle = "#fff";
+  ctx.font = gameFont(UI_SIZE);
+  ctx.textAlign = "left";
+
+  ctx.fillText("Level " + level + " / " + maxLevel, 18, 32);
+  ctx.fillText("Moves " + movesLeft, 18, 58);
+  ctx.fillText("R = { " + mission.join(" ") + " }", 18, 84);
+
+  ctx.fillStyle = messageColor;
+  ctx.fillText(message, 18, 114);
+
+  if (gameState === "complete") {
+    ctx.fillStyle = GREEN;
+    ctx.font = gameFont(STATUS_SIZE);
+    ctx.textAlign = "center";
+    ctx.fillText("Set R Completed", W / 2, H / 2);
+  }
+
+  if (gameState === "finished") {
+    ctx.fillStyle = GREEN;
+    ctx.font = gameFont(STATUS_SIZE);
+    ctx.textAlign = "center";
+    ctx.fillText("Set R Completed", W / 2, H / 2);
+  }
+}
+
+function render() {
+  boardEl.innerHTML = "";
+
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const cell = document.createElement("div");
+
+      cell.className = "cell";
+      cell.textContent = board[y][x];
+      cell.draggable = running;
+
+      cell.addEventListener("dragstart", e => {
+        if (!running) return;
+
+        dragging = { x, y };
+        cell.classList.add("dragging");
+        e.dataTransfer.effectAllowed = "move";
+      });
+
+      cell.addEventListener("dragend", () => {
+        cell.classList.remove("dragging");
+      });
+
+      cell.addEventListener("dragover", e => {
+        if (!running) return;
+        e.preventDefault();
+      });
+
+      cell.addEventListener("drop", e => {
+        if (!running || !dragging) return;
+
+        e.preventDefault();
+
+        const target = { x, y };
+
+        if (!isAdjacent(dragging, target)) {
+          message = "Only adjacent swap is allowed.";
+          messageColor = "#ff4444";
+          dragging = null;
+          render();
+          return;
+        }
+
+        swapCells(dragging, target);
+        movesLeft--;
+
+        dragging = null;
+
+        updateCollectedProgress();
+        render();
+        checkComplete();
+
+        if (running && movesLeft <= 0) {
+          gameOver("No moves left.");
+        }
+      });
+
+      boardEl.appendChild(cell);
+    }
+  }
+
+  setEl.textContent =
+    "Collected = { " +
+    (collected.length ? collected.join(" ") : "Ø") +
+    " }";
+
+  drawUI();
+}
+
+startEl.addEventListener("click", () => {
+  startEl.style.display = "none";
+  resetGame();
+});
+
+resizeGame();
+drawUI();
+</script>
+</body>
+</html>
