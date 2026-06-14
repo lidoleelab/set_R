@@ -211,13 +211,10 @@ function shuffleBoard() {
 function setupLevel() {
   mission = makeMission();
 
-  let attempts = 0;
-
   do {
     board = makeBoard();
     ensureMissionEmojisExist();
-    attempts++;
-  } while (findPathForLength(mission.length) && attempts < 300);
+  } while (findPathForLength(mission.length));
 
   movesLeft = getMoveLimit();
   dragging = null;
@@ -228,7 +225,6 @@ function setupLevel() {
   message = "Swap only adjacent emojis.";
   messageColor = GREEN;
 
-  updateCollectedProgress();
   render();
 }
 
@@ -365,10 +361,6 @@ function updateCollectedProgress() {
     if (findPathForLength(len)) {
       longest = len;
     }
-  }
-
-  if (longest === mission.length && gameState === "running") {
-    longest = mission.length - 1;
   }
 
   collected = mission.slice(0, longest);
