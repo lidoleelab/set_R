@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no" />
 <title>Complete Set R</title>
 
 <style>
@@ -11,6 +11,7 @@ body {
   background: #000;
   overflow: hidden;
   user-select: none;
+  touch-action: none;
   font-family: Helvetica, Arial, sans-serif;
   cursor: pointer;
 }
@@ -42,24 +43,24 @@ body {
 
 #board {
   display: grid;
-  grid-template-columns: repeat(5, 54px);
-  grid-template-rows: repeat(5, 54px);
-  gap: 6px;
+  grid-template-columns: repeat(5, var(--cell-size));
+  grid-template-rows: repeat(5, var(--cell-size));
+  gap: var(--gap-size);
 }
 
 .cell {
-  width: 54px;
-  height: 54px;
+  width: var(--cell-size);
+  height: var(--cell-size);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 25px;
+  font-size: var(--emoji-size);
   box-sizing: border-box;
   cursor: pointer;
 }
 
-.cell.dragging {
-  opacity: 0.25;
+.cell.selected {
+  opacity: 0.35;
 }
 
 #set {
@@ -118,24 +119,100 @@ const setEl = document.getElementById("set");
 const startEl = document.getElementById("start");
 
 let W, H;
+let isMobileLayout = false;
 
 const UI_SIZE = 18;
 const STATUS_SIZE = 20;
 const GREEN = "#00ff00";
 
+let audioCtx = null;
+
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+
+  if (audioCtx.state === "suspended") {
+    audioCtx.resume();
+  }
+}
+
+function tone(freq, duration = 0.08, type = "sine", volume = 0.07) {
+  if (!audioCtx) return;
+
+  const now = audioCtx.currentTime;
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, now);
+
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(volume, now + 0.01);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + duration);
+
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+
+  osc.start(now);
+  osc.stop(now + duration + 0.02);
+}
+
+function soundSelect() {
+  tone(520, 0.05, "sine", 0.045);
+}
+
+function soundSwap() {
+  tone(420, 0.06, "triangle", 0.055);
+  setTimeout(() => tone(620, 0.06, "triangle", 0.05), 55);
+}
+
+function soundInvalid() {
+  tone(120, 0.13, "sawtooth", 0.07);
+}
+
+function soundProgress() {
+  tone(760, 0.07, "sine", 0.055);
+}
+
+function soundComplete() {
+  tone(420, 0.09, "sine", 0.07);
+  setTimeout(() => tone(560, 0.09, "sine", 0.07), 90);
+  setTimeout(() => tone(760, 0.12, "sine", 0.08), 180);
+}
+
+function soundGameOver() {
+  tone(90, 0.16, "sawtooth", 0.08);
+}
+
 function resizeGame() {
-  const s = Math.min(window.innerWidth, window.innerHeight);
+  if (window.innerWidth < window.innerHeight) {
+    W = window.innerWidth;
+    H = window.innerHeight;
+    isMobileLayout = true;
+  } else {
+    const s = Math.min(window.innerWidth, window.innerHeight);
+    W = s;
+    H = s;
+    isMobileLayout = false;
+  }
 
-  W = s;
-  H = s;
+  gameEl.style.width = W + "px";
+  gameEl.style.height = H + "px";
+  gameEl.style.left = (window.innerWidth - W) / 2 + "px";
+  gameEl.style.top = (window.innerHeight - H) / 2 + "px";
 
-  gameEl.style.width = s + "px";
-  gameEl.style.height = s + "px";
-  gameEl.style.left = (window.innerWidth - s) / 2 + "px";
-  gameEl.style.top = (window.innerHeight - s) / 2 + "px";
+  uiCanvas.width = W;
+  uiCanvas.height = H;
 
-  uiCanvas.width = s;
-  uiCanvas.height = s;
+  const boardSize = Math.min(W * 0.76, H * 0.42, 294);
+  const gapSize = Math.max(4, Math.min(6, boardSize * 0.02));
+  const cellSize = (boardSize - gapSize * 4) / 5;
+  const emojiSize = Math.max(21, Math.min(25, cellSize * 0.47));
+
+  document.documentElement.style.setProperty("--cell-size", cellSize + "px");
+  document.documentElement.style.setProperty("--gap-size", gapSize + "px");
+  document.documentElement.style.setProperty("--emoji-size", emojiSize + "px");
 
   drawUI();
 }
@@ -154,11 +231,11 @@ let level = 1;
 let mission = [];
 let board = [];
 let collected = [];
-let dragging = null;
+let selected = null;
 let running = false;
 let movesLeft = 0;
 let gameState = "start";
-let message = "Swap only adjacent emojis";
+let message = "Tap two adjacent emojis";
 let messageColor = GREEN;
 
 function gameFont(size) {
@@ -217,12 +294,12 @@ function setupLevel() {
   } while (findPathForLength(mission.length));
 
   movesLeft = getMoveLimit();
-  dragging = null;
+  selected = null;
   running = true;
   gameState = "running";
   collected = [];
 
-  message = "Swap only adjacent emojis";
+  message = "Tap two adjacent emojis";
   messageColor = GREEN;
 
   render();
@@ -244,6 +321,7 @@ function nextLevel() {
   boardEl.innerHTML = "";
   setEl.textContent = "";
 
+  soundComplete();
   drawUI();
 
   setTimeout(() => {
@@ -273,6 +351,8 @@ function finishGame() {
 function gameOver(reason) {
   running = false;
   gameState = "gameover";
+
+  soundGameOver();
 
   startEl.innerHTML =
     "<div>" +
@@ -355,6 +435,7 @@ function findPathForLength(targetLength) {
 }
 
 function updateCollectedProgress() {
+  let previousLength = collected.length;
   let longest = 0;
 
   for (let len = 1; len <= mission.length; len++) {
@@ -364,6 +445,10 @@ function updateCollectedProgress() {
   }
 
   collected = mission.slice(0, longest);
+
+  if (collected.length > previousLength && collected.length < mission.length) {
+    soundProgress();
+  }
 }
 
 function replaceCompletedPath(path) {
@@ -384,6 +469,52 @@ function checkComplete() {
   setTimeout(() => {
     nextLevel();
   }, 500);
+}
+
+function handleCellSelect(x, y) {
+  if (!running) return;
+
+  initAudio();
+
+  const current = { x, y };
+
+  if (!selected) {
+    selected = current;
+    soundSelect();
+    render();
+    return;
+  }
+
+  if (selected.x === x && selected.y === y) {
+    selected = null;
+    render();
+    return;
+  }
+
+  if (!isAdjacent(selected, current)) {
+    message = "Only adjacent swap is allowed";
+    messageColor = "#ff4444";
+    selected = null;
+    soundInvalid();
+    render();
+    return;
+  }
+
+  swapCells(selected, current);
+  movesLeft--;
+  selected = null;
+
+  message = "Tap two adjacent emojis";
+  messageColor = GREEN;
+
+  soundSwap();
+  updateCollectedProgress();
+  render();
+  checkComplete();
+
+  if (running && movesLeft <= 0) {
+    gameOver("No moves left.");
+  }
 }
 
 function drawUI() {
@@ -426,52 +557,13 @@ function render() {
 
       cell.className = "cell";
       cell.textContent = board[y][x];
-      cell.draggable = running;
 
-      cell.addEventListener("dragstart", e => {
-        if (!running) return;
+      if (selected && selected.x === x && selected.y === y) {
+        cell.classList.add("selected");
+      }
 
-        dragging = { x, y };
-        cell.classList.add("dragging");
-        e.dataTransfer.effectAllowed = "move";
-      });
-
-      cell.addEventListener("dragend", () => {
-        cell.classList.remove("dragging");
-      });
-
-      cell.addEventListener("dragover", e => {
-        if (!running) return;
-        e.preventDefault();
-      });
-
-      cell.addEventListener("drop", e => {
-        if (!running || !dragging) return;
-
-        e.preventDefault();
-
-        const target = { x, y };
-
-        if (!isAdjacent(dragging, target)) {
-          message = "Only adjacent swap is allowed";
-          messageColor = "#ff4444";
-          dragging = null;
-          render();
-          return;
-        }
-
-        swapCells(dragging, target);
-        movesLeft--;
-
-        dragging = null;
-
-        updateCollectedProgress();
-        render();
-        checkComplete();
-
-        if (running && movesLeft <= 0) {
-          gameOver("No moves left.");
-        }
+      cell.addEventListener("click", () => {
+        handleCellSelect(x, y);
       });
 
       boardEl.appendChild(cell);
@@ -486,9 +578,11 @@ function render() {
   drawUI();
 }
 
-startEl.addEventListener("click", () => {
+startEl.addEventListener("click", e => {
+  initAudio();
   startEl.style.display = "none";
   resetGame();
+  e.preventDefault();
 });
 
 resizeGame();
